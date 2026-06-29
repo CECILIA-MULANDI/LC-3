@@ -10,6 +10,11 @@ pub struct Registers {
     pub pc: u16,
     pub cond: u16,
 }
+enum ConditionFlag {
+    POS = 1 << 0,
+    ZRO = 1 << 1,
+    NEG = 1 << 2,
+}
 impl Registers {
     pub fn new() -> Registers {
         Registers {
@@ -53,6 +58,16 @@ impl Registers {
             8 => self.pc,
             9 => self.cond,
             _ => panic!("Index is out of bounds"),
+        }
+    }
+    pub fn update_r_cond_register(&mut self, r: u16) {
+        if self.get(r) == 0 {
+            self.update(9, ConditionFlag::ZRO as u16);
+        } else if (self.get(r) >> 15) != 0 {
+            // a 1 in the left-most bit indicates negative
+            self.update(9, ConditionFlag::NEG as u16);
+        } else {
+            self.update(9, ConditionFlag::POS as u16);
         }
     }
 }
