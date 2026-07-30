@@ -72,3 +72,9 @@ pub fn execute_instruction(instr: u16, vm: &mut Vm) {
 pub fn read_memory(&mut self, address: u16) -> u16 {
     self.memory[address as usize]
 }
+fn sign_extend(mut x: u16, bit_count: u8) -> u16 {
+    if (x >> (bit_count - 1)) & 1 != 0 {
+        x |= 0xFFFF << bit_count;
+    }
+    x
+}

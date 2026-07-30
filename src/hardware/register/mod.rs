@@ -1,3 +1,4 @@
+// where user's programs start at the VM MEMORY
 const PC_START: u16 = 0x3000;
 
 pub struct Registers {
@@ -12,9 +13,14 @@ pub struct Registers {
     pub pc: u16,
     pub cond: u16,
 }
+// stores the signal status of the
+// last operation that happened within the machine.
 enum ConditionFlag {
+    // actually 1 -> 001
     POS = 1 << 0,
+    // actually 2 -> 010
     ZRO = 1 << 1,
+    // actually 4 -> 100
     NEG = 1 << 2,
 }
 impl Registers {
@@ -62,6 +68,7 @@ impl Registers {
             _ => panic!("Index is out of bounds"),
         }
     }
+    // CHECKS FOR THE RESULT STORED IN R(REGISTER) AND UPDATES ACCORDINGLY
     pub fn update_r_cond_register(&mut self, r: u16) {
         if self.get(r) == 0 {
             self.update(9, ConditionFlag::ZRO as u16);
