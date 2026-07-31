@@ -66,6 +66,25 @@ pub fn lea(instruction: u16, vm: &mut VM) {
     vm.registers.update_r_cond_register(dr);
 }
 
+/// ADD has two modes
+///  1.Register mode(bit 5 = 0)
+/// so we can have DR = SR1 + SR2
+/// 2. Immediate mode(bit 5 = 1)
+pub fn add(instruction: u16, vm: &mut VM) {
+    let dr = (instruction >> 9) & 0x7;
+    let sr1 = (instruction >> 6) & 0x7;
+    let mod_flag = (instruction >> 5) & 0x1;
+    let value = if mod_flag == 1 {
+        let sign_extended = sign_extend(instruction & 0x1F, 5);
+        vm.registers.get(sr1).wrapping_add(sign_extended)
+    } else {
+        let sr2 = (instruction) & 0x7;
+        vm.registers.get(sr1).wrapping_add(vm.registers.get(sr2))
+    };
+    vm.registers.update(dr, value);
+    vm.registers.update_r_cond_register(dr);
+}
+
 /// TRAP: dispatch to a system-call service by trap vector.
 ///
 /// bit position:  15 14 13 12 | 11 10 9 8 | 7 6 5 4 3 2 1 0
@@ -100,6 +119,7 @@ pub fn trap(instruction: u16, vm: &mut VM) {
 pub fn execute_instruction(instr: u16, vm: &mut VM) {
     let opcode = get_op_code(&instr);
     match opcode {
+        Some(OpCode::ADD) => add(instr, vm),
         Some(OpCode::LEA) => lea(instr, vm),
         Some(OpCode::TRAP) => trap(instr, vm),
         // other opcodes will be added as the tutorial progresses
