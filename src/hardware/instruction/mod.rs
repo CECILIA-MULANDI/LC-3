@@ -1,8 +1,12 @@
-use vm::Vm;
+use crate::hardware::vm::{MEMORY_SIZE, VM};
+use std::io::{self, Write};
+use std::process;
+
 pub enum OpCode {
     BR = 0, // branch
     ADD,    // add
     LD,     // load
+    ST,     // store
     JSR,    // jump register
     AND,    // bitwise and
     LDR,    // load register
@@ -38,43 +42,75 @@ pub fn get_op_code(instruction: &u16) -> Option<OpCode> {
         _ => None,
     }
 }
-pub fn execute_program(vm: &mut Vm) {
-    while vm.registers.pc < MEMORY_SIZE {
-        //read the instruction
-        let instruction = vm.read_memory(vm.registers.pc);
-        //increment pc
-        vm.registers.pc += 1;
-        // extract the opcode then execute the instruction
-        instruction::execute_instruction(instruction, vm);
+
+fn sign_extend(mut x: u16, bit_count: u8) -> u16 {
+    // is the top bit of the original a 1?
+    if (x >> (bit_count - 1)) & 1 != 0 {
+        // yes -> fill the new positions with 1s
+        x |= 0xFFFF << bit_count;
+    }
+    // otherwise leave as-is (already zeros above)
+    x
+}
+
+/// LEA: DR = PC + sign_extend(PCoffset9)
+///
+/// bit position:  15 14 13 12 | 11 10 9 | 8 7 6 5 4 3 2 1 0
+///                └── 1110 ──┘ └── DR ──┘ └── PCoffset9 ────┘
+///                  opcode      3 bits     9 bits (signed)
+pub fn lea(instruction: u16, vm: &mut VM) {
+    let dr = (instruction >> 9) & 0x7;
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let addr = vm.registers.pc.wrapping_add(pc_offset);
+    vm.registers.update(dr, addr);
+    vm.registers.update_r_cond_register(dr);
+}
+
+/// TRAP: dispatch to a system-call service by trap vector.
+///
+/// bit position:  15 14 13 12 | 11 10 9 8 | 7 6 5 4 3 2 1 0
+///                └── 1111 ──┘ └─ unused ─┘└─ trap vector ─┘
+///                  opcode       4 bits         8 bits
+pub fn trap(instruction: u16, vm: &mut VM) {
+    match instruction & 0xFF {
+        0x22 => {
+            // PUTS: print null-terminated string starting at R0
+            let mut index = vm.registers.r0;
+            let mut c = vm.read_memory(index);
+            while c != 0x0000 {
+                print!("{}", (c as u8) as char);
+                index = index.wrapping_add(1);
+                c = vm.read_memory(index);
+            }
+            io::stdout().flush().expect("failed to flush");
+        }
+        0x25 => {
+            // HALT
+            println!("HALT detected");
+            io::stdout().flush().expect("failed to flush");
+            process::exit(0);
+        }
+        other => {
+            println!("unimplemented trap: {:#x}", other);
+            process::exit(1);
+        }
     }
 }
-pub fn execute_instruction(instr: u16, vm: &mut Vm) {
-    //extract the opcode from the instruction
+
+pub fn execute_instruction(instr: u16, vm: &mut VM) {
     let opcode = get_op_code(&instr);
     match opcode {
-        Some(Opcode::ADD) => add(instr, vm),
-        Some(Opcode::AND) => and(instr, vm),
-        Some(Opcode::NOT) => not(instr, vm),
-        Some(Opcode::BR) => br(instr, vm),
-        Some(Opcode::JMP) => jmp(instr, vm),
-        Some(Opcode::JSR) => jsr(instr, vm),
-        Some(Opcode::LD) => ld(instr, vm),
-        Some(Opcode::LDI) => ldi(instr, vm),
-        Some(Opcode::LDR) => ld(instr, vm),
-        Some(Opcode::LEA) => lea(instr, vm),
-        Some(OpCode::ST) => st(instr, vm),
-        Some(OpCode::STI) => sti(instr, vm),
-        Some(OpCode::STR) => str(instr, vm),
+        Some(OpCode::LEA) => lea(instr, vm),
         Some(OpCode::TRAP) => trap(instr, vm),
+        // other opcodes will be added as the tutorial progresses
         _ => {}
     }
 }
-pub fn read_memory(&mut self, address: u16) -> u16 {
-    self.memory[address as usize]
-}
-fn sign_extend(mut x: u16, bit_count: u8) -> u16 {
-    if (x >> (bit_count - 1)) & 1 != 0 {
-        x |= 0xFFFF << bit_count;
+
+pub fn execute_program(vm: &mut VM) {
+    while (vm.registers.pc as usize) < MEMORY_SIZE {
+        let instr = vm.read_memory(vm.registers.pc);
+        vm.registers.pc = vm.registers.pc.wrapping_add(1);
+        execute_instruction(instr, vm);
     }
-    x
 }
