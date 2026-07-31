@@ -1,5 +1,6 @@
 mod hardware;
 use byteorder::{BigEndian, ReadBytesExt};
+use hardware::instruction::execute_program;
 use hardware::vm::VM;
 
 use std::fs::File;
@@ -25,4 +26,5 @@ fn main() {
             }
         }
     }
+    execute_program(&mut vm);
 }
