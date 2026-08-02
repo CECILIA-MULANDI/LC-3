@@ -136,7 +136,7 @@ pub fn trap(instruction: u16, vm: &mut VM) {
             process::exit(0);
         }
         other => {
-            println!("unimplemented trap: {:#x}", other);
+            println!("unimplemented trap: {other}");
             process::exit(1);
         }
     }
@@ -153,11 +153,15 @@ pub fn execute_instruction(instr: u16, vm: &mut VM) {
         _ => {}
     }
 }
+//fetch->save->increment->execute saved copy
 
 pub fn execute_program(vm: &mut VM) {
     while (vm.registers.pc as usize) < MEMORY_SIZE {
+        //fetch & save memory[pc]
         let instr = vm.read_memory(vm.registers.pc);
+        //increment pc count
         vm.registers.pc = vm.registers.pc.wrapping_add(1);
+        //execute the saved copy
         execute_instruction(instr, vm);
     }
 }
