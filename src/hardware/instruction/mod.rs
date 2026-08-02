@@ -113,6 +113,11 @@ pub fn ldi(instruction: u16, vm: &mut VM) {
 ///                  opcode       4 bits         8 bits
 pub fn trap(instruction: u16, vm: &mut VM) {
     match instruction & 0xFF {
+        0x21 => {
+            // OUT: print single char from R0
+            print!("{}", (vm.registers.r0 as u8) as char);
+            io::stdout().flush().expect("failed to flush")
+        }
         0x22 => {
             // PUTS: print null-terminated string starting at R0
             let mut index = vm.registers.r0;
