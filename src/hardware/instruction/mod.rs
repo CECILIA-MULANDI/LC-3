@@ -84,6 +84,27 @@ pub fn add(instruction: u16, vm: &mut VM) {
     vm.registers.update(dr, value);
     vm.registers.update_r_cond_register(dr);
 }
+/// AND has two modes
+/// So we need to take two numbers, do a bitwise AND
+/// then store that result in some register
+///  SO:: if both bits are 1 the result will always be 1
+/// Otherwise: it will always be 0
+///  MODES: Register mode (bit 5 = 0)
+///         Immediate mode(bit 5 = 1)
+pub fn and(instruction: u16, vm: &mut VM) {
+    let dr = (instruction >> 9) & 0x7;
+    let sr1 = (instruction >> 6) & 0x7;
+    let mod_flag = (instruction >> 5) & 0x1;
+    let value = if mod_flag == 1 {
+        let imm5 = sign_extend(instruction & 0x1F, 5);
+        vm.registers.get(sr1) & imm5
+    } else {
+        let sr2 = instruction & 0x7;
+        vm.registers.get(sr1) & vm.registers.get(sr2)
+    };
+    vm.registers.update(dr, value);
+    vm.registers.update_r_cond_register(dr);
+}
 /// ldi - Load Indirect.
 /// Reads memory cell to get a pointer
 /// then reads that address to get the value
@@ -149,6 +170,7 @@ pub fn execute_instruction(instr: u16, vm: &mut VM) {
         Some(OpCode::LEA) => lea(instr, vm),
         Some(OpCode::TRAP) => trap(instr, vm),
         Some(OpCode::LDI) => ldi(instr, vm),
+        Some(OpCode::AND) => and(instr, vm),
         // other opcodes will be added as the tutorial progresses
         _ => {}
     }
