@@ -84,6 +84,27 @@ pub fn add(instruction: u16, vm: &mut VM) {
     vm.registers.update(dr, value);
     vm.registers.update_r_cond_register(dr);
 }
+/// ldi - Load Indirect.
+/// Reads memory cell to get a pointer
+/// then reads that address to get the value
+/// So we have two memory reads
+/// bit position:  15 14 13 12 | 11 10 9 | 8 7 6 5 4 3 2 1 0
+///                └── 1110 ──┘ └── DR ──┘ └── PCoffset9 ────┘
+///                  opcode      3 bits     9 bits (signed)
+/// pointer_addr = PC + sign_extend(PCoffset9)
+/// pointer = memory[pointer_addr]
+/// value = memory[pointer]
+/// DR = value
+/// update condition flags for DR
+pub fn ldi(instruction: u16, vm: &mut VM) {
+    let dr = (instruction >> 9) & 0x7;
+    let pc_offset = sign_extend(instruction & 0x1FF, 9);
+    let addr = vm.registers.pc.wrapping_add(pc_offset);
+    let pointer = vm.read_memory(addr);
+    let value = vm.read_memory(pointer);
+    vm.registers.update(dr, value);
+    vm.registers.update_r_cond_register(dr);
+}
 
 /// TRAP: dispatch to a system-call service by trap vector.
 ///
@@ -122,6 +143,7 @@ pub fn execute_instruction(instr: u16, vm: &mut VM) {
         Some(OpCode::ADD) => add(instr, vm),
         Some(OpCode::LEA) => lea(instr, vm),
         Some(OpCode::TRAP) => trap(instr, vm),
+        Some(OpCode::LDI) => ldi(instr, vm),
         // other opcodes will be added as the tutorial progresses
         _ => {}
     }
