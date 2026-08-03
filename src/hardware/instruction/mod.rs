@@ -126,6 +126,27 @@ pub fn ldi(instruction: u16, vm: &mut VM) {
     vm.registers.update(dr, value);
     vm.registers.update_r_cond_register(dr);
 }
+/// BR - allows branching just like if/else, while or for loops
+/// bit position:  15 14 13 12 | 11 | 10 | 9 | 8 7 6 5 4 3 2 1 0
+///                 └── 0000 ──┘  n    z    p  └── PCoffset9 ────┘
+///                opcode         ↑    ↑    ↑    9 bits (signed)
+///                  └─ flags to test ─┘
+/// 1. Look at the instruction's n/z/p bits.
+/// 2. Look at what the cond register currently holds
+/// (which is N, Z, or P from the LAST arithmetic op).
+/// 3. If any bit in the instruction's n/z/p matches the currently-set flag → JUMP.
+///    PC = PC + sign_extend(PCoffset9)
+///  4. Otherwise → do nothing.
+/// (PC has already been advanced by the fetch loop, so we just fall through
+///  to the next instruction.)
+pub fn br(instruction: u16, vm: &mut VM) {
+    let flags = (instruction >> 9) & 0x7;
+    // the overlap test
+    if flags & vm.registers.cond != 0 {
+        let pc_offset = sign_extend(instruction & 0x1FF, 9);
+        vm.registers.pc = vm.registers.pc.wrapping_add(pc_offset);
+    }
+}
 
 /// TRAP: dispatch to a system-call service by trap vector.
 ///
@@ -171,6 +192,7 @@ pub fn execute_instruction(instr: u16, vm: &mut VM) {
         Some(OpCode::TRAP) => trap(instr, vm),
         Some(OpCode::LDI) => ldi(instr, vm),
         Some(OpCode::AND) => and(instr, vm),
+        Some(OpCode::BR) => br(instr, vm),
         // other opcodes will be added as the tutorial progresses
         _ => {}
     }
