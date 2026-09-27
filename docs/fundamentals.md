@@ -7,37 +7,81 @@ Please **NOTE**: It is not a substitute for the tutorial, you can use it as a pr
 
 ## Two's complement
 
-`sign_extend` is the first function in the tutorial that does something non-obvious, and it is impossible to understand until you accept one idea:
+The first function in the tutorial that made me stop was `sign_extend`. It is five lines long, I could follow what it did mechanically, and I still could not see why it needed to exist.
+
+What I was missing was one idea:
 
 > A bit pattern has no value until you say how wide it is.
 
-That sounds like a technicality. It is the whole thing.
+That reads like a technicality. It isn't, and once it landed for me `sign_extend` stopped being mysterious, so let's take the long way round to it.
 
-### The problem
+### Start with the problem the hardware has
 
-A register holds 16 bits. There are 65,536 distinct patterns, and that is all the machine has. If you want negative numbers, they have to come out of that same budget. There is no sign flag hiding anywhere, no extra bit. Some of those 65,536 patterns have to _mean_ negative.
+A register holds 16 bits, which gives you 65,536 different patterns, and that is the entire budget. There is no sign flag tucked away somewhere and no seventeenth bit you can borrow.
 
-### The obvious scheme, and why it fails
+So if you want negative numbers, they have to come out of those same 65,536 patterns. Some patterns you would otherwise read as positive have to be redefined to mean something negative instead. The only real question is which ones, and that is a decision somebody had to make.
 
-Spend the top bit as a sign. `0` means positive, `1` means negative, and the bits below it carry the magnitude. To negate a number you flip the top bit, and nothing else moves.
+### The scheme you would probably invent first
+
+Here is the obvious answer, and it is the one I reached for. Use the top bit as a sign: `0` for positive, `1` for negative, and let the bits underneath carry the size of the number. Want to negate something? Flip the top bit. Nothing else moves.
 
 ```
 0 101  =  +5        sign 0, magnitude 5
 1 101  =  -5        sign 1, magnitude 5
 ```
 
-This is called sign-magnitude, and it is the first thing everyone proposes, because it is how we write numbers on paper: `-5` is `5` with a mark stuck on the front. Hardware does not use it. It fails in two ways, and both come from the same root, which is that the top bit here is a _flag_ rather than a number.
+This has a name, sign-magnitude, and the reason it feels so natural is that it is exactly how we write numbers on paper. `-5` is just `5` with a mark stuck on the front.
 
-**It produces two zeros.** `0000` is `+0` and `1000` is `-0`. Both have to mean zero, because integers have no negative zero, so 16 patterns carry only 15 distinct values and one pattern is dead.
+Hardware does not use it, though, and it is worth sitting with why, because the two things it gets wrong are the same two things two's complement gets right. Both of them come from one flaw: that top bit is a _flag_, not a number.
 
-The wasted pattern is not the real cost. The real cost is that every zero test now needs two cases. Compare what your own code can get away with against what it would need:
+**It produces two zeros.**
 
-```rust
-if self.get(r) == 0 {                              // two's complement
-if self.get(r) == 0 || self.get(r) == 0x8000 {     // sign-magnitude
+Let's apply the decoding rule to these two patterns:
+
+```
+0 000     sign positive, magnitude 0   →   +0
+1 000     sign negative, magnitude 0   →   -0
 ```
 
-That second form would be required at every zero comparison in the machine, in hardware just as much as in this emulator.
+Both patterns are perfectly legal, and both of them mean zero, because there is no such thing as a negative zero. Negate zero and you get zero back, right?
+
+It is worth seeing why this happens rather than just noting that it does. Magnitude zero is the one case where the sign bit has nothing to act on. But the bit is still physically there and you can still set it, so the scheme has no choice but to accept a second pattern for a value it already had.
+
+If that still feels abstract, it gets much clearer if you just write every pattern out. Four bits give you 16 of them, because 2⁴ is 16:
+
+```
+0000 = +0        1000 = -0
+0001 = +1        1001 = -1
+0010 = +2        1010 = -2
+0011 = +3        1011 = -3
+0100 = +4        1100 = -4
+0101 = +5        1101 = -5
+0110 = +6        1110 = -6
+0111 = +7        1111 = -7
+```
+
+Sixteen rows there, one per pattern. Now go back through and collect the actual _numbers_, skipping any you have already written down:
+
+```
+-7  -6  -5  -4  -3  -2  -1  0  +1  +2  +3  +4  +5  +6  +7
+```
+
+Count them: seven negatives, seven positives, and zero sitting in the middle. Fifteen numbers, from sixteen patterns. The gap is `0000` and `1000`, which are two separate rows in the first list but land in the same slot in the second. Two labels stuck on one jar, and one of those labels can now never be used to name anything else.
+
+Losing one number out of 65,536 is not really the problem, though. What hurts is what the duplicate does to every comparison in the machine.
+
+Remember that hardware compares _patterns_, not values. Asking "is this zero" means asking "are all of these bits zero", and `1000` does not pass that test even though it means zero. So compare what the condition-flag code in this VM gets away with against what it would need:
+
+```rust
+    // two's complement
+if self.get(r) == 0 {
+     // sign-magnitude
+if self.get(r) == 0 || self.get(r) == 0x8000 {
+```
+
+`0x8000` is `1000` at register width: `1000000000000000`, sign bit set and magnitude zero, which is `-0` in a 16-bit register.
+
+Leaving that second case out does not merely miss a value, it reports the opposite of the truth. A result of `-0` would skip the `ZRO` branch, fall through to the negative check, find a `1` in the top bit and set `NEG`. The machine would flag zero as negative and the next `BR` would branch on it. The same doubled test would be required at every zero comparison in the machine, in hardware just as much as in this emulator.
 
 **It breaks addition.** This is the serious one. Add `+5` and `-3`, which should give `+2`:
 
@@ -50,7 +94,44 @@ That second form would be required at every zero comparison in the machine, in h
 
 The adder gave the top bit its usual weight of 8, because a bit sitting in that column is worth 8. But in sign-magnitude that bit does not mean 8, it means "negate everything below me". An adder adds weights. It cannot carry out an instruction.
 
-Rescuing the scheme means the hardware has to inspect both sign bits before doing anything: add the magnitudes when the signs agree, and when they disagree, compare the two magnitudes, subtract the smaller from the larger, and take the sign of the larger. That is a comparator and a subtractor bolted around the adder plus control logic to choose between them, and the comparison has to finish before the subtraction can start, so it is slower as well as bigger.
+So can the scheme be rescued? It can, but look at what it costs. The hardware has to stop and read both sign bits before it does anything at all, and then take one of two completely different paths.
+
+**When the signs agree**, it is not so bad. Take `-5` plus `-2`:
+
+```
+1 101     (-5)
+1 010     (-2)
+```
+
+Both signs are `1`, so add the magnitudes and keep the sign. `101 + 010` is `111`, which is 7, and the sign stays negative. The result is `1 111`, which is `-7`. Correct, and the only extra work was reading those two sign bits.
+
+**When the signs disagree**, it gets ugly. Here is `+5` plus `-3` again, the sum that came out as `+0` a moment ago:
+
+```
+0 101     (+5)
+1 011     (-3)
+```
+
+Adding the magnitudes would give 8, which does not even fit in the three magnitude bits, and is the wrong answer anyway. What you actually want is the difference. So now the hardware has to:
+
+1. **Compare** the magnitudes, `101` against `011`, and work out that 5 is the larger one.
+2. **Subtract** the smaller from the larger, `101 - 011`, which gives `010`, or 2.
+3. **Choose a sign**, by copying it from whichever number had the bigger magnitude. `+5` won, so the answer is positive.
+
+The result is `0 010`, which is `+2`. Correct this time, but count what it took: a comparison, a subtraction, and a selection, where two's complement gets there with one addition.
+
+Now for the bit that shows why step 1 is not optional. Run the mirror image, `+3` plus `-5`:
+
+```
+0 011     (+3)
+1 101     (-5)
+```
+
+Step 2 is the _identical_ subtraction, `101 - 011`, producing the identical `010`. But the answer here is `-2`, not `+2`, because this time `-5` is the one with the bigger magnitude. So the bits of the difference tell you nothing whatsoever about the sign of the answer. Only the comparison does.
+
+And that comparison has to finish before the subtraction can start, not run alongside it, because the subtractor needs its operands the right way round. Try `011 - 101` in three unsigned bits and you need a negative result to express the answer, which is the exact thing you were trying to build in the first place.
+
+So the circuit ends up being a comparator, then a subtractor, then a multiplexer to pick the sign, one after another in sequence. Bigger than a single adder and slower than one too, which is why nobody builds it.
 
 Sign-magnitude is not a strawman, incidentally. IEEE floating point does use a sign bit exactly this way, and it pays both bills in full: `+0.0` and `-0.0` are genuinely distinct values in every floating-point unit, and float addition really does carry that compare-and-branch logic.
 
@@ -173,13 +254,13 @@ Two steps, in that order. The shift moves the field's lowest bit to position 0 a
 
 The mask for an `n`-bit field is `n` ones, which is `2^n - 1`:
 
-| Field width | Binary      | Mask    | Used for                |
-| ----------- | ----------- | ------- | ----------------------- |
-| 1 bit       | `1`         | `0x1`   | mode bit (bit 5)        |
-| 3 bits      | `111`       | `0x7`   | a register number       |
-| 5 bits      | `11111`     | `0x1F`  | `imm5`                  |
-| 8 bits      | `11111111`  | `0xFF`  | trap vector             |
-| 9 bits      | `111111111` | `0x1FF` | `PCoffset9`             |
+| Field width | Binary      | Mask    | Used for          |
+| ----------- | ----------- | ------- | ----------------- |
+| 1 bit       | `1`         | `0x1`   | mode bit (bit 5)  |
+| 3 bits      | `111`       | `0x7`   | a register number |
+| 5 bits      | `11111`     | `0x1F`  | `imm5`            |
+| 8 bits      | `11111111`  | `0xFF`  | trap vector       |
+| 9 bits      | `111111111` | `0x1FF` | `PCoffset9`       |
 
 `0x7` is not a defensive bound. There are 8 registers, a register number is 3 bits, and a 3-bit field cannot hold anything but 0 to 7. The mask is the field's width expressed as a number.
 
