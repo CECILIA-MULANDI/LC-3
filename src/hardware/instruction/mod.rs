@@ -257,6 +257,7 @@ pub fn ldi(instruction: u16, vm: &mut VM) {
     vm.registers.update(dr, value);
     vm.registers.update_r_cond_register(dr);
 }
+
 /// BR - allows branching just like if/else, while or for loops
 /// bit position:  15 14 13 12 | 11 | 10 | 9 | 8 7 6 5 4 3 2 1 0
 ///                 └── 0000 ──┘  n    z    p  └── PCoffset9 ────┘
@@ -277,6 +278,74 @@ pub fn br(instruction: u16, vm: &mut VM) {
         let pc_offset = sign_extend(instruction & 0x1FF, 9);
         vm.registers.pc = vm.registers.pc.wrapping_add(pc_offset);
     }
+}
+
+// JMP - unconditional jump
+// PC = BaseR
+//
+// bit position:  15 14 13 12 | 11 10 9 | 8 7 6 | 5 4 3 2 1 0
+//                └── 1100 ──┘  0  0  0  └Base R┘  0 0 0 0 0 0
+//                  opcode       unused   3 bits      unused
+//
+// Absolute, not PC-relative, so it reaches the whole 64K address space
+// while BR can only manage PC +/- 256. No arithmetic, so no wrapping_add,
+// and no flag update because the PC is not a general-purpose result.
+//
+// RET is not a separate opcode. It assembles to 0xC1C0, which is this
+// instruction with BaseR = 7, so the handler covers it with no special
+// case.
+pub fn jmp(instruction: u16, vm: &mut VM) {
+    let base_r = (instruction >> 6) & 0x7;
+    vm.registers.pc = vm.registers.get(base_r);
+}
+
+// JSR / JSRR - jump to subroutine
+//
+// Two things happen, in this order:
+//   1. R7 = address of the instruction after this one   (the breadcrumb)
+//   2. PC = the subroutine's address                    (the jump)
+//
+// R7 is not special hardware. The spec designates it by convention as the
+// link register: JSR writes it, RET reads it. That is the whole calling
+// convention, and it is why RET had nothing useful to return to until now.
+//
+// The return address needs no computing. execute_program already advanced
+// pc before dispatching here, so vm.registers.pc is ALREADY the address
+// of the next instruction.
+//
+// Mode flag is bit 11, not bit 5 like ADD and AND.
+//
+// bit 11 = 1, JSR, PC-relative:
+//   15 14 13 12 | 11 | 10 9 8 7 6 5 4 3 2 1 0
+//   └── 0100 ──┘  1   └──── PCoffset11 ──────┘
+//     opcode           11 bits (signed), reaches -1024 to +1023
+//
+// bit 11 = 0, JSRR, absolute from a register:
+//   15 14 13 12 | 11 | 10 9 | 8 7 6 | 5 4 3 2 1 0
+//   └── 0100 ──┘  0    0  0  └Base R┘  0 0 0 0 0 0
+//     opcode           unused  3 bits     unused
+//
+// The target is worked out BEFORE R7 is written, and that ordering is
+// load-bearing. Consider JSRR R7 (0x41C0), which is legal and does occur.
+// Write R7 first and the subsequent read of BaseR returns the value just
+// written, so the jump lands on the return address, the subroutine never
+// runs, and there is no error to notice.
+//
+// No flag update: R7 is written, but JSR does not set condition codes.
+pub fn jsr(instruction: u16, vm: &mut VM) {
+    let mode_flag = (instruction >> 11) & 0x1;
+    // resolve the target first, while BaseR is still intact
+    let target = if mode_flag == 1 {
+        let pc_offset = sign_extend(instruction & 0x7FF, 11);
+        vm.registers.pc.wrapping_add(pc_offset)
+    } else {
+        let base_r = (instruction >> 6) & 0x7;
+        vm.registers.get(base_r)
+    };
+    // pc is already pointing at the instruction after this one
+    let return_addr = vm.registers.pc;
+    vm.registers.update(7, return_addr);
+    vm.registers.pc = target;
 }
 
 /// TRAP: dispatch to a system-call service by trap vector.
@@ -330,6 +399,8 @@ pub fn execute_instruction(instr: u16, vm: &mut VM) {
         Some(OpCode::STI) => sti(instr, vm),
         Some(OpCode::LDR) => ldr(instr, vm),
         Some(OpCode::STR) => str(instr, vm),
+        Some(OpCode::JSR) => jsr(instr, vm),
+        Some(OpCode::JMP) => jmp(instr, vm),
         // other opcodes will be added as the tutorial progresses
         _ => {}
     }
