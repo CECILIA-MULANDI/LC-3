@@ -2,6 +2,7 @@ use crate::hardware::instruction;
 use crate::hardware::vm::{MEMORY_SIZE, VM};
 use std::io::{self, Write};
 use std::process;
+use termios::*;
 
 pub enum OpCode {
     BR = 0, // branch
@@ -353,6 +354,38 @@ pub fn jsr(instruction: u16, vm: &mut VM) {
 /// bit position:  15 14 13 12 | 11 10 9 8 | 7 6 5 4 3 2 1 0
 ///                └── 1111 ──┘ └─ unused ─┘└─ trap vector ─┘
 ///                  opcode       4 bits         8 bits
+///
+/// Undo raw mode before the process dies.
+///
+/// main.rs already has a teardown after execute_program, but process::exit
+/// terminates without unwinding or returning to main, so that line never
+/// runs for any program that ends in a trap. Without this, the shell is
+/// left with no echo and no line editing, needing `reset`.
+///
+/// This does not need main's saved copy of the original settings. It reads
+/// whatever is current and sets the two bits back on, which is right unless
+/// the shell had them off to begin with, and no normal shell does.
+///
+/// Note the exact mirror of main.rs:
+///     &= !(ICANON | ECHO)    clear, AND with the inverted mask
+///     |=  (ICANON | ECHO)    set, OR with the mask as-is
+/// Same pair as sign_extend's `& 0x1F` and `|= 0xFFFF << 5`.
+///
+/// Layering caveat: a trap handler knowing about termios is a smell. The
+/// tidier fix is for HALT to end the fetch loop and let main's teardown do
+/// this, which would also retire the loop-condition quirk in the README.
+fn restore_terminal() {
+    let stdin_fd = 0;
+    let mut termios = match Termios::from_fd(stdin_fd) {
+        Ok(t) => t,
+        // Not being on a terminal is fine, for example when output is piped.
+        // Nothing to repair, so say nothing and carry on to the exit.
+        Err(_) => return,
+    };
+    termios.c_lflag |= ICANON | ECHO;
+    let _ = tcsetattr(stdin_fd, TCSANOW, &termios);
+}
+
 pub fn trap(instruction: u16, vm: &mut VM) {
     match instruction & 0xFF {
         0x21 => {
@@ -373,11 +406,14 @@ pub fn trap(instruction: u16, vm: &mut VM) {
         }
         0x25 => {
             // HALT
+            restore_terminal();
             println!("HALT detected");
             io::stdout().flush().expect("failed to flush");
             process::exit(0);
         }
         other => {
+            // This arm exits too, so it needs the same repair as HALT.
+            restore_terminal();
             println!("unimplemented trap: {other}");
             process::exit(1);
         }
